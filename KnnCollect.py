@@ -6,6 +6,7 @@ import WeightsUtilities as WU
 import SSUtilities as UTILS
 import os as OS
 import arcpy.management as DM
+import gapy as GAPY
 import arcpy.da as DA
 
 #### Two New Field in Collected Feature ####
@@ -37,8 +38,6 @@ def stCollectByKNN(ssdo, timeField, outputFC, inSpan, inDistance):
     startTime = time.min()
     #### Create Bin for Space and Time ####
     timeBin = (time - startTime) / inSpan
-    xBin = NUM.floor((ssdo.xyCoords[:,0] - ssdo.extent.XMin) / inDistance)
-    yBin = NUM.floor((ssdo.extent.YMax - ssdo.xyCoords[:,1]) / inDistance)
 
     numObs = ssdo.numObs
     #### Create Sudo-fid to Find K-NN in Space and Time
@@ -76,6 +75,10 @@ def stCollectByKNN(ssdo, timeField, outputFC, inSpan, inDistance):
         ARCPY.AddIDMessage("ERROR", 210, outputFC)
         raise SystemExit()
 
+    #### Create k-Nearest Neighbor Search Type ####
+    gaSearch = GAPY.ga_nsearch(gaTable)
+    gaSearch.init_nearest(inDistance, 0, "euclidean")
+
     #### Add Count Field ####
     countFieldNameOut = ARCPY.ValidateFieldName(countFieldName, outPath)
     timeFieldNameOut = ARCPY.ValidateFieldName(timeFieldName, outPath)
@@ -89,18 +92,17 @@ def stCollectByKNN(ssdo, timeField, outputFC, inSpan, inDistance):
     #### Detect S-T K-NN by Space and Time Bin ####
     duplicateList = []
     for record in fid:
+        kNNList = [record]
         if record not in duplicateList:
-            kNNList = [record]
             for pair in fid:
-                indexI = fid.index(record)
-                indexJ = fid.index(pair)
                 if pair != record :
-                    x1, y1, t1 = xBin[record], yBin[record], timeBin[record]
-                    x2, y2, t2 = xBin[pair], yBin[pair], timeBin[pair]
-                    if (x1 == x2) and (y1 == y2) and (t1 == t2):
-                        kNNList.append(pair)
-                        duplicateList.append(pair)
+                    gaSearch.search_by_idx(record)
+                    for nh in gaSearch:
+                        if timeBin[record] == timeBin[pair]:
+                            kNNList.append(nh.idx)
+                            duplicateList.append(nh.idx)
             #### Create and Populate New Feature ####
+            kNNList = list(set(kNNList))
             count = len(kNNList)
             dt = time[record]
             x0 = ssdo.xyCoords[kNNList, 0].mean()
@@ -111,7 +113,7 @@ def stCollectByKNN(ssdo, timeField, outputFC, inSpan, inDistance):
             ARCPY.SetProgressorPosition()
 
     #### Clean Up ####
-    del rowsOut, timeBin, xBin, yBin
+    del rowsOut, timeBin, kNNList, duplicateList
 
     return countFieldNameOut
 
@@ -122,7 +124,7 @@ if __name__ == '__main__':
     timeField = "DATE"
     outputFC = r"C:\Data\time\collectedStarbucks.shp"
     inSpan = 7
-    inDistance = 1000
+    inDistance = 1000.
     #### Create SSDataObject ####
     ssdo = SSDO.SSDataObject(inputFC)
     ssdo.obtainData(ssdo.oidName, [timeField], dateStr = True)
